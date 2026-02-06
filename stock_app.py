@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import sys
+from datetime import datetime, timedelta
 
 # Add current directory to path so we can import our modules
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -27,34 +28,56 @@ def load_data():
 st.sidebar.title("Configuration")
 
 # Data Management
-if st.sidebar.button("Refetch Data (Slow)"):
-    with st.spinner("Fetching latest stock data..."):
-        stock_fetcher.fetch_stock_data()
-        st.cache_data.clear() # Clear cache to reload new data
-        st.success("Data updated!")
+with st.sidebar.expander("Manage Data", expanded=False):
+    if st.button("Refetch ALL Data (Slow)"):
+        with st.spinner("Fetching all stock data..."):
+            stock_fetcher.fetch_stock_data()
+            st.cache_data.clear()
+            st.success("All data updated!")
+            st.rerun()
+
+    st.write("---")
+    new_ticker = st.text_input("Add New Ticker:", placeholder="e.g. AMD")
+    if st.button("Add Ticker"):
+        if new_ticker:
+            with st.spinner(f"Fetching data for {new_ticker}..."):
+                msg = stock_fetcher.add_ticker(new_ticker)
+                
+                if "Success" in msg:
+                    st.success(msg)
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error(msg)
+        else:
+            st.warning("Please enter a ticker symbol.")
 
 df = load_data()
 
 if df is None:
-    st.error("No data found. Please click 'Refetch Data' in the sidebar.")
+    st.error("No data found. Please add a ticker or click 'Refetch Data'.")
     st.stop()
 
 # Ticker Selection
-tickers = df['Ticker'].unique()
-selected_ticker = st.sidebar.selectbox("Select Ticker", tickers, index=0)
-
-# Filter Data
-ticker_df = df[df['Ticker'] == selected_ticker].copy()
-ticker_df['Date'] = pd.to_datetime(ticker_df['Date'])
-latest_price = ticker_df['Close'].iloc[-1]
-latest_date = ticker_df['Date'].iloc[-1].strftime('%Y-%m-%d')
+if 'Ticker' in df.columns:
+    tickers = df['Ticker'].unique()
+    selected_ticker = st.sidebar.selectbox("Select Ticker", tickers, index=0)
+    
+    # Filter Data
+    ticker_df = df[df['Ticker'] == selected_ticker].copy()
+    ticker_df['Date'] = pd.to_datetime(ticker_df['Date'])
+    latest_price = ticker_df['Close'].iloc[-1]
+    latest_date = ticker_df['Date'].iloc[-1].strftime('%Y-%m-%d')
+else:
+    st.error("Invalid CSV format. Expected 'Ticker' column.")
+    st.stop()
 
 # Header
 st.title(f"{selected_ticker} Analysis Dashboard")
 st.markdown(f"**Current Price:** ${latest_price:.2f} &nbsp;|&nbsp; **Date:** {latest_date}")
 
 # Tabs
-tab1, tab2, tab3 = st.tabs(["📈 Chart Analysis", "🔮 Forecasting", "🔙 Backtesting"])
+tab1, tab2, tab3, tab4 = st.tabs(["📈 Chart Analysis", "🔮 Forecasting", "🔙 Backtesting", "✅ Accuracy Tracker"])
 
 # Tab 1: Visualization
 with tab1:
@@ -150,6 +173,18 @@ with tab2:
                 forecast_1d_adj = res['forecast_1day'] * (1 + adj_factor_1d/100)
                 forecast_5d_adj = res['forecast_5days'] * (1 + adj_factor_1w/100)
                 
+                # Store in session state for saving
+                st.session_state['last_forecast'] = {
+                    'ticker': selected_ticker,
+                    'date_logged': datetime.now().strftime('%Y-%m-%d'),
+                    'target_1d': (pd.to_datetime(latest_date) + timedelta(days=1)).strftime('%Y-%m-%d'),
+                    'pred_1d': round(forecast_1d_adj, 2),
+                    'target_1w': (pd.to_datetime(latest_date) + timedelta(days=5)).strftime('%Y-%m-%d'),
+                    'pred_1w': round(forecast_5d_adj, 2),
+                    'model': res['best_model_1day'], # Simplification: tracking 1D best model
+                    'adj_info': f"1D:{adj_factor_1d}%|1W:{adj_factor_1w}%"
+                }
+
                 col1, col2 = st.columns(2)
                 
                 with col1:
@@ -182,6 +217,37 @@ with tab2:
                     st.markdown("**Model Accuracy Competition (Lower Error IS Better):**")
                     st.dataframe(pd.DataFrame.from_dict(res['comparison_5days'], orient='index', columns=['MAE Error']).sort_values('MAE Error'))
 
+    # Save Button Section
+    if 'last_forecast' in st.session_state and st.session_state['last_forecast']['ticker'] == selected_ticker:
+        st.write("---")
+        if st.button("💾 Save Forecast to History"):
+            hist_path = os.path.join(current_dir, 'forecast_history.csv')
+            lf = st.session_state['last_forecast']
+            
+            # Prepare row
+            new_row = pd.DataFrame([{
+                'Date_Logged': lf['date_logged'],
+                'Ticker': lf['ticker'],
+                'Target_Date_1D': lf['target_1d'],
+                'Predicted_1D': lf['pred_1d'],
+                'Target_Date_1W': lf['target_1w'],
+                'Predicted_1W': lf['pred_1w'],
+                'Model_Used': lf['model'],
+                'Adjustment_Info': lf['adj_info'],
+                'Actual_1D': None,
+                'Actual_1W': None,
+                'Error_1D_Pct': None,
+                'Error_1W_Pct': None
+            }])
+            
+            # Append
+            if os.path.exists(hist_path):
+                new_row.to_csv(hist_path, mode='a', header=False, index=False)
+            else:
+                new_row.to_csv(hist_path, mode='w', header=True, index=False)
+            
+            st.success("Forecast saved! Check the 'Accuracy Tracker' tab.")
+
 # Tab 3: Backtest
 with tab3:
     st.subheader("Strategy Backtest (Last 20% Data)")
@@ -211,3 +277,59 @@ with tab3:
             
             # Chart
             st.plotly_chart(fig, use_container_width=True)
+
+# Tab 4: Accuracy Tracker
+with tab4:
+    st.subheader("🔮 Truth Tracker: How good is the AI?")
+    st.write("This tab tracks your past predictions and verifies them when the real data becomes available.")
+    
+    hist_path = os.path.join(current_dir, 'forecast_history.csv')
+    if os.path.exists(hist_path):
+        history_df = pd.read_csv(hist_path)
+        
+        # Verify Button
+        if st.button("🔄 Verify Accuracy (Check Latest Prices)"):
+            with st.spinner("Checking actual stock prices against predictions..."):
+                updates = 0
+                for index, row in history_df.iterrows():
+                    # Only verify if we don't have an Actual value yet
+                    if pd.isna(row['Actual_1D']) or row['Actual_1D'] == "":
+                        target_date = row['Target_Date_1D']
+                        ticker = row['Ticker']
+                        
+                        # Find actual price in our main stocks_data
+                        # Convert both to datetime for comparison
+                        stock_records = df[df['Ticker'] == ticker]
+                        # Find record where Date == target_date
+                        match = stock_records[stock_records['Date'] == target_date]
+                        
+                        if not match.empty:
+                            actual_price = match['Close'].values[0]
+                            history_df.at[index, 'Actual_1D'] = round(actual_price, 2)
+                            
+                            # Calculate Error %
+                            pred = row['Predicted_1D']
+                            error = abs(actual_price - pred) / actual_price * 100
+                            history_df.at[index, 'Error_1D_Pct'] = round(error, 2)
+                            updates += 1
+                
+                if updates > 0:
+                    history_df.to_csv(hist_path, index=False)
+                    st.success(f"Verified {updates} past predictions!")
+                else:
+                    st.info("No new predictions to verify (Target dates haven't arrived yet or data not fetched).")
+        
+        # Display Table
+        st.dataframe(history_df.sort_values('Date_Logged', ascending=False))
+        
+        # Summary Metrics
+        if not history_df['Error_1D_Pct'].isna().all():
+            avg_error = history_df['Error_1D_Pct'].mean()
+            st.metric("Average AI Error (1 Day)", f"{avg_error:.2f}%", delta_color="inverse")
+            if avg_error < 2.0:
+                 st.caption("🔥 The AI is performing excellently (< 2% error).")
+            else:
+                 st.caption("❄️ The AI needs improvement.")
+                 
+    else:
+        st.info("No history found. Go to 'Forecasting', run a prediction, and click 'Save'.")

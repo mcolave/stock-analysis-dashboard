@@ -1,0 +1,4 @@
+Date_Logged,Ticker,Target_Date_1D,Predicted_1D,Target_Date_1W,Predicted_1W,Model_Used,Adjustment_Info,Actual_1D,Actual_1W,Error_1D_Pct,Error_1W_Pct
+2026-02-06,AAPL,2026-02-06,275.62,2026-02-10,273.24,Linear Regression,1D:0.0%|1W:0.0%,,,,
+2026-02-06,STX,2026-02-06,408.31,2026-02-10,436.1,Linear Regression,1D:0.0%|1W:0.0%,,,,
+2026-02-06,NNE,2026-02-06,25.42,2026-02-10,31.1,Random Forest,1D:0.0%|1W:0.0%,,,,
