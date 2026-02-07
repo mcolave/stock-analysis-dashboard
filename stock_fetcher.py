@@ -1,6 +1,8 @@
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import os
+import db_manager
 
 def process_stock_data(df, ticker):
     """
@@ -31,6 +33,29 @@ def process_stock_data(df, ticker):
     
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
+
+    # --- NEW INDICATORS ---
+    # MACD (12, 26, 9)
+    exp1 = df['Close'].ewm(span=12, adjust=False).mean()
+    exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = exp1 - exp2
+    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+
+    # ATR (14)
+    # TR = Max(|High-Low|, |High-PrevClose|, |Low-PrevClose|)
+    df['PrevClose'] = df['Close'].shift(1)
+    df['TR1'] = df['High'] - df['Low']
+    df['TR2'] = abs(df['High'] - df['PrevClose'])
+    df['TR3'] = abs(df['Low'] - df['PrevClose'])
+    df['TR'] = df[['TR1', 'TR2', 'TR3']].max(axis=1)
+    df['ATR'] = df['TR'].rolling(window=14).mean()
+
+    # OBV (On-Balance Volume)
+    # If Close > PrevClose, +Volume. If Close < PrevClose, -Volume.
+    df['OBV_Multiplier'] = np.where(df['Close'] > df['PrevClose'], 1, -1)
+    df['OBV_Multiplier'] = np.where(df['Close'] == df['PrevClose'], 0, df['OBV_Multiplier'])
+    df['OBV'] = (df['Volume'] * df['OBV_Multiplier']).cumsum()
+
     
     # Add Ticker column
     df['Ticker'] = ticker
@@ -40,14 +65,14 @@ def process_stock_data(df, ticker):
     
     # Define relevant columns to keep
     columns_to_keep = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Volume', 
-                        'SMA_50', 'SMA_200', 'BB_Upper', 'BB_Middle', 'BB_Lower', 'RSI']
+                        'SMA_50', 'SMA_200', 'BB_Upper', 'BB_Middle', 'BB_Lower', 'RSI',
+                        'MACD', 'MACD_Signal', 'ATR', 'OBV']
     
     # Filter only existing columns
     existing_cols = [c for c in columns_to_keep if c in df.columns]
     return df[existing_cols]
 
-def get_data_path():
-    return os.path.join(os.path.dirname(__file__), 'stocks_data.csv')
+
 
 def add_ticker(ticker_symbol):
     """
@@ -55,15 +80,12 @@ def add_ticker(ticker_symbol):
     Returns string message (success or error).
     """
     ticker_symbol = ticker_symbol.upper().strip()
-    file_path = get_data_path()
+    ticker_symbol = ticker_symbol.upper().strip()
     
-    if not os.path.exists(file_path):
-        return "Error: Data file not found. Run full fetch first."
-        
-    # Check if already exists
+    # Check if already exists in DB
     try:
-        existing_df = pd.read_csv(file_path)
-        if ticker_symbol in existing_df['Ticker'].unique():
+        existing_df = db_manager.load_price_data(ticker_symbol)
+        if existing_df is not None and not existing_df.empty:
             return f"Ticker {ticker_symbol} is already in the database."
     except Exception as e:
         return f"Error reading database: {e}"
@@ -77,11 +99,10 @@ def add_ticker(ticker_symbol):
             
         processed_df = process_stock_data(df, ticker_symbol)
         
-        # Append to CSV
-        # We read, append, and save back. 
-        # (For very large files, append mode 'a' is better, but for <50MB this is safe and cleaner for deduplication if needed)
-        updated_df = pd.concat([existing_df, processed_df])
-        updated_df.to_csv(file_path, index=False)
+        processed_df = process_stock_data(df, ticker_symbol)
+        
+        # Save to DB
+        db_manager.save_price_data(processed_df)
         
         return f"Successfully added {ticker_symbol}!"
         
@@ -115,13 +136,17 @@ def fetch_stock_data():
         print("Concatenating data...")
         final_df = pd.concat(all_data)
         
-        output_path = get_data_path()
-        final_df.to_csv(output_path, index=False)
-        print(f"Successfully saved stock data to {output_path}")
+    if all_data:
+        print("Concatenating data...")
+        final_df = pd.concat(all_data)
+        
+        db_manager.save_price_data(final_df)
+        print(f"Successfully saved stock data to Database")
         print(f"Total records: {len(final_df)}")
         print(final_df.head())
     else:
         print("No stock data collected.")
 
 if __name__ == "__main__":
+    db_manager.init_db() # Ensure DB exists
     fetch_stock_data()

@@ -12,6 +12,11 @@ import stock_visualizer
 import stock_forecaster
 import stock_backtester
 import stock_fetcher
+import db_manager
+import stock_analyst
+
+# Initialize DB on startup
+db_manager.init_db()
 
 # Page Config
 st.set_page_config(page_title="Stock Analysis Dashboard", layout="wide", page_icon="📈")
@@ -19,10 +24,7 @@ st.set_page_config(page_title="Stock Analysis Dashboard", layout="wide", page_ic
 # Function to load data
 @st.cache_data
 def load_data():
-    file_path = os.path.join(current_dir, 'stocks_data.csv')
-    if not os.path.exists(file_path):
-        return None
-    return pd.read_csv(file_path)
+    return db_manager.load_price_data()
 
 # Sidebar
 st.sidebar.title("Configuration")
@@ -85,17 +87,19 @@ with tab1:
     with st.expander("ℹ️ Need help? Explanation for Dummies"):
         st.markdown("""
         **What am I looking at?**
-        *   **Candlesticks**: Show the price movement. Green means price went UP, Red means price went DOWN.
-        *   **SMA (Simple Moving Average)**: The average price over time. 
-            *   *Orange Line (50-day)*: Short-term trend.
-            *   *Blue Line (200-day)*: Long-term trend. If price is above this, it's generally a "Bull Market" (Good).
         *   **Bollinger Bands (Gray Shaded)**: Shows volatility. Price usually stays inside these bands. If it touches the top, it might be expensive (Overbought). If it touches the bottom, it might be cheap (Oversold).
-        *   **RSI (Purple Line at bottom)**: Momentum. 
-            *   *Above 70*: Overbought (Might crash soon).
-            *   *Below 30*: Oversold (Might bounce up).
+        *   **RSI (Purple Line)**: Momentum. Above 70 = Overbought. Below 30 = Oversold.
+        *   **MACD (Bottom Panel)**: Trend finder.
+            *   *bars (Green/Red)*: Momentum strength. Green = Bullish (Up), Red = Bearish (Down).
+            *   *Lines (Cyan/Orange)*: When Cyan crosses above Orange, it's often a Buy signal.
         """)
     fig = stock_visualizer.create_chart(df, selected_ticker)
     st.plotly_chart(fig, use_container_width=True)
+
+    # Plain English Analysis
+    with st.expander("📝 Instant Analysis (Plain English)", expanded=True):
+        analysis_text = stock_analyst.generate_summary(ticker_df, selected_ticker)
+        st.markdown(analysis_text)
 
 # Tab 2: Forecast
 with tab2:
@@ -221,30 +225,10 @@ with tab2:
     if 'last_forecast' in st.session_state and st.session_state['last_forecast']['ticker'] == selected_ticker:
         st.write("---")
         if st.button("💾 Save Forecast to History"):
-            hist_path = os.path.join(current_dir, 'forecast_history.csv')
             lf = st.session_state['last_forecast']
             
-            # Prepare row
-            new_row = pd.DataFrame([{
-                'Date_Logged': lf['date_logged'],
-                'Ticker': lf['ticker'],
-                'Target_Date_1D': lf['target_1d'],
-                'Predicted_1D': lf['pred_1d'],
-                'Target_Date_1W': lf['target_1w'],
-                'Predicted_1W': lf['pred_1w'],
-                'Model_Used': lf['model'],
-                'Adjustment_Info': lf['adj_info'],
-                'Actual_1D': None,
-                'Actual_1W': None,
-                'Error_1D_Pct': None,
-                'Error_1W_Pct': None
-            }])
-            
-            # Append
-            if os.path.exists(hist_path):
-                new_row.to_csv(hist_path, mode='a', header=False, index=False)
-            else:
-                new_row.to_csv(hist_path, mode='w', header=True, index=False)
+            # Save to DB
+            db_manager.save_forecast(lf)
             
             st.success("Forecast saved! Check the 'Accuracy Tracker' tab.")
 
@@ -259,9 +243,14 @@ with tab3:
         We travelled back in time to the last few months and let the AI trade using its own predictions.
         
         *   **Win Rate**: The percentage of trades that made a profit. > 50% is decent.
-        *   **Strategy Return**: How much money the AI made (in percentage).
+        *   **Strategy Return**: How much money the AI made (AFTER paying a 0.1% fee per trade).
         *   **Buy & Hold Return**: How much you would have made if you just bought the stock and did nothing.
-        *   **Equity Curve**: The chart shows your account balance growing (or shrinking) over time. Green line is the AI, Blue line is doing nothing. **You want the Green line to be higher!**
+        *   **Sharpe Ratio**: **Risk vs. Reward.**
+            *   *Above 1.0*: Good (More return for the risk).
+            *   *Below 1.0*: Bad (Too much risk for little return).
+        *   **Max Drawdown**: **The "Stomach Ache" Factor.** The worst drop your account would have suffered from the peak.
+            *   e.g. -20% means at one point, you lost 20% of your account value. Smaller is better!
+        *   **Equity Curve**: Green line = AI. Blue line = Lazy Buy & Hold.
         """)
     
     if st.button("Run Backtest"):
@@ -269,11 +258,13 @@ with tab3:
             metrics, fig = stock_backtester.run_backtest(df, selected_ticker)
             
             # Metrics
-            m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+            m_col1, m_col2, m_col3, m_col4, m_col5, m_col6 = st.columns(6)
             m_col1.metric("Total Trades", metrics['trades'])
             m_col2.metric("Win Rate", f"{metrics['win_rate']:.1%}")
             m_col3.metric("Strategy Return", f"{metrics['strategy_return']:.2%}")
-            m_col4.metric("Buy & Hold Return", f"{metrics['buy_hold_return']:.2%}")
+            m_col4.metric("Buy & Hold", f"{metrics['buy_hold_return']:.2%}")
+            m_col5.metric("Sharpe Ratio", f"{metrics['sharpe_ratio']:.2f}")
+            m_col6.metric("Max Drawdown", f"{metrics['max_drawdown']:.2%}")
             
             # Chart
             st.plotly_chart(fig, use_container_width=True)
@@ -283,48 +274,53 @@ with tab4:
     st.subheader("🔮 Truth Tracker: How good is the AI?")
     st.write("This tab tracks your past predictions and verifies them when the real data becomes available.")
     
-    hist_path = os.path.join(current_dir, 'forecast_history.csv')
-    if os.path.exists(hist_path):
-        history_df = pd.read_csv(hist_path)
+    start_verify = st.button("🔄 Verify Accuracy (Check Latest Prices)")
         
-        # Verify Button
-        if st.button("🔄 Verify Accuracy (Check Latest Prices)"):
+    history_df = db_manager.get_all_forecasts()
+    
+    if not history_df.empty:
+        # Normalize column names to match DB schema if needed, but fetch returns DB cols:
+        # id, date_logged, ticker, target_date_1d, predicted_1d, ...
+        
+        # Verify Button Logic
+        if start_verify:
             with st.spinner("Checking actual stock prices against predictions..."):
                 updates = 0
+                # Iterate rows
                 for index, row in history_df.iterrows():
-                    # Only verify if we don't have an Actual value yet
-                    if pd.isna(row['Actual_1D']) or row['Actual_1D'] == "":
-                        target_date = row['Target_Date_1D']
-                        ticker = row['Ticker']
+                    # Check if actual_1d is null/NaN
+                    if pd.isna(row['actual_1d']):
+                        target_date = row['target_date_1d']
+                        ticker = row['ticker']
+                        row_id = row['id']
                         
                         # Find actual price in our main stocks_data
-                        # Convert both to datetime for comparison
                         stock_records = df[df['Ticker'] == ticker]
-                        # Find record where Date == target_date
                         match = stock_records[stock_records['Date'] == target_date]
                         
                         if not match.empty:
-                            actual_price = match['Close'].values[0]
-                            history_df.at[index, 'Actual_1D'] = round(actual_price, 2)
+                            actual_price = float(match['Close'].values[0])
                             
                             # Calculate Error %
-                            pred = row['Predicted_1D']
+                            pred = float(row['predicted_1d'])
                             error = abs(actual_price - pred) / actual_price * 100
-                            history_df.at[index, 'Error_1D_Pct'] = round(error, 2)
+                            
+                            # Update DB
+                            db_manager.update_actual_price_1d(row_id, actual_price, error)
                             updates += 1
                 
                 if updates > 0:
-                    history_df.to_csv(hist_path, index=False)
                     st.success(f"Verified {updates} past predictions!")
+                    st.rerun() # Refresh to show new data
                 else:
                     st.info("No new predictions to verify (Target dates haven't arrived yet or data not fetched).")
         
         # Display Table
-        st.dataframe(history_df.sort_values('Date_Logged', ascending=False))
+        st.dataframe(history_df.sort_values('date_logged', ascending=False))
         
         # Summary Metrics
-        if not history_df['Error_1D_Pct'].isna().all():
-            avg_error = history_df['Error_1D_Pct'].mean()
+        if not history_df['error_1d_pct'].isna().all():
+            avg_error = history_df['error_1d_pct'].mean()
             st.metric("Average AI Error (1 Day)", f"{avg_error:.2f}%", delta_color="inverse")
             if avg_error < 2.0:
                  st.caption("🔥 The AI is performing excellently (< 2% error).")

@@ -15,7 +15,10 @@ def run_backtest(df, ticker):
         
     ticker_df['Date'] = pd.to_datetime(ticker_df['Date'])
     
-    features = ['Open', 'High', 'Low', 'Close', 'Volume', 'SMA_50', 'SMA_200', 'BB_Upper', 'BB_Middle', 'BB_Lower', 'RSI']
+    features = ['Open', 'High', 'Low', 'Close', 'Volume', 'SMA_50', 'SMA_200', 'BB_Upper', 'BB_Middle', 'BB_Lower', 'RSI', 'MACD', 'MACD_Signal', 'ATR', 'OBV']
+    
+    # Only use features that actually exist
+    features = [f for f in features if f in ticker_df.columns]
     ticker_df = ticker_df.dropna(subset=features)
     
     # Target: Next Day Close
@@ -59,12 +62,42 @@ def run_backtest(df, ticker):
     results['Signal'] = np.where(results['Predicted_Next_Close'] > results['Actual_Next_Open'], 1, 0)
     
     # Returns
-    results['Strategy_Return'] = results['Signal'] * ((results['Actual_Next_Close'] - results['Actual_Next_Open']) / results['Actual_Next_Open'])
+    # Returns with Fees
+    # Commission: 0.1% per trade (Entry + Exit = 0.2% round trip approx, but simplistic application per signal)
+    COMMISSION = 0.001 
+    
+    # We pay commission when we enter (Buy) AND when we exit (Sell)
+    # Strategy Return = Raw Return - (Entry Fee + Exit Fee)
+    # Approx: Return - (2 * Commission) if we held for 1 period? 
+    # Let's simple apply cost per transaction signal.
+    
+    # Vectorized approach:
+    # If Signal is 1 (Active Position), we assume we held it. 
+    # This simple backtester assumes 1-day holding period for every signal.
+    # So we buy at Open, Sell at Close. That's 2 transactions per day.
+    transaction_costs = results['Signal'] * (COMMISSION * 2) 
+    
+    results['Strategy_Return'] = (results['Signal'] * ((results['Actual_Next_Close'] - results['Actual_Next_Open']) / results['Actual_Next_Open'])) - transaction_costs
     results['BuyHold_Return'] = (results['Actual_Next_Close'] - results['Actual_Next_Open']) / results['Actual_Next_Open']
     
     # Cumulative Equity
     results['Strategy_Equity'] = (1 + results['Strategy_Return']).cumprod()
     results['BuyHold_Equity'] = (1 + results['BuyHold_Return']).cumprod()
+    
+    # --- Risk Metrics ---
+    # Sharpe Ratio (Assuming 0 risk-free rate for simplicity, annualized)
+    # Sharpe = Mean / Std * sqrt(252)
+    daily_returns = results['Strategy_Return']
+    if daily_returns.std() != 0:
+        sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
+    else:
+        sharpe_ratio = 0.0
+        
+    # Max Drawdown
+    # Peak so far
+    rolling_max = results['Strategy_Equity'].cummax()
+    drawdown = (results['Strategy_Equity'] - rolling_max) / rolling_max
+    max_drawdown = drawdown.min()
     
     # Metrics
     total_trades = results['Signal'].sum()
@@ -75,7 +108,9 @@ def run_backtest(df, ticker):
         'trades': int(total_trades),
         'win_rate': win_rate,
         'strategy_return': results['Strategy_Equity'].iloc[-1] - 1,
-        'buy_hold_return': results['BuyHold_Equity'].iloc[-1] - 1
+        'buy_hold_return': results['BuyHold_Equity'].iloc[-1] - 1,
+        'sharpe_ratio': sharpe_ratio,
+        'max_drawdown': max_drawdown
     }
     
     # Chart

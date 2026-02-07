@@ -3,3 +3,9 @@ __pycache__/
 .venv/
 .env
 .vscode/
+
+# Project Data
+# stocks.db - Removed to allow tracking
+*.csv
+*.log
+

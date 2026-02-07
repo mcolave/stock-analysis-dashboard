@@ -14,10 +14,10 @@ def create_chart(df, ticker):
         
     ticker_df['Date'] = pd.to_datetime(ticker_df['Date'])
     
-    # Create figure with secondary y-axis for RSI
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                        vertical_spacing=0.03, subplot_titles=(f'{ticker} Stock Price', 'RSI'),
-                        row_width=[0.2, 0.7])
+    # Create figure with MACD
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
+                        vertical_spacing=0.03, subplot_titles=(f'{ticker} Stock Price', 'RSI', 'MACD'),
+                        row_width=[0.2, 0.2, 0.6])
 
     # Candlestick
     fig.add_trace(go.Candlestick(x=ticker_df['Date'],
@@ -45,6 +45,19 @@ def create_chart(df, ticker):
     # RSI Reference Lines (70 and 30)
     fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
     fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+
+    # MACD
+    if 'MACD' in ticker_df.columns:
+        # MACD Line
+        fig.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['MACD'], line=dict(color='cyan', width=1), name='MACD'), row=3, col=1)
+        # Signal Line
+        fig.add_trace(go.Scatter(x=ticker_df['Date'], y=ticker_df['MACD_Signal'], line=dict(color='orange', width=1), name='Signal'), row=3, col=1)
+        # Histogram
+        # Calculate hist locally for coloring
+        hist = ticker_df['MACD'] - ticker_df['MACD_Signal']
+        colors = ['green' if val >= 0 else 'red' for val in hist]
+        
+        fig.add_trace(go.Bar(x=ticker_df['Date'], y=hist, marker_color=colors, name='MACD Hist'), row=3, col=1)
 
     # Layout styling
     fig.update_layout(

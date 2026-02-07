@@ -27,7 +27,12 @@ def run_forecast(df, ticker):
     else:
         ticker_df = df.copy()
     
-    features = ['Open', 'High', 'Low', 'Close', 'Volume', 'SMA_50', 'SMA_200', 'BB_Upper', 'BB_Middle', 'BB_Lower', 'RSI']
+    features = ['Open', 'High', 'Low', 'Close', 'Volume', 'SMA_50', 'SMA_200', 'BB_Upper', 'BB_Middle', 'BB_Lower', 'RSI', 'MACD', 'MACD_Signal', 'ATR', 'OBV']
+    
+    # Check if we have all features
+    missing_cols = [col for col in features if col not in ticker_df.columns]
+    if missing_cols:
+        return {"error": f"Missing data columns: {missing_cols}. Please click 'Refetch ALL Data' in the sidebar to generate them."}
     
     # Drop rows where features are NaN
     ticker_df = ticker_df.dropna(subset=features)
