@@ -60,6 +60,87 @@ if df is None:
     st.error("No data found. Please add a ticker or click 'Refetch Data'.")
     st.stop()
 
+# --- HELPER: Watchlist Generator ---
+def generate_watchlist(df):
+    watchlist_data = []
+    
+    if 'Ticker' not in df.columns:
+        return pd.DataFrame()
+        
+    tickers = df['Ticker'].unique()
+    
+    for ticker in tickers:
+        ticker_df = df[df['Ticker'] == ticker].sort_values('Date')
+        
+        if ticker_df.empty:
+            continue
+            
+        latest_row = ticker_df.iloc[-1]
+        
+        # Calculate Change
+        if len(ticker_df) > 1:
+            prev_close = ticker_df.iloc[-2]['Close']
+            change = latest_row['Close'] - prev_close
+            pct_change = (change / prev_close) # Percent as decimal
+        else:
+            change = 0.0
+            pct_change = 0.0
+            
+        # RSI Analysis
+        rsi = latest_row['RSI'] if not pd.isna(latest_row['RSI']) else 50
+        if rsi > 70:
+            rsi_status = "🔥 Overbought"
+        elif rsi < 30:
+            rsi_status = "❄️ Oversold"
+        else:
+            rsi_status = "Neutral"
+            
+        # Trend Analysis (Price vs SMA 200)
+        sma_200 = latest_row['SMA_200']
+        if pd.isna(sma_200):
+            trend = "Unknown"
+        elif latest_row['Close'] > sma_200:
+            trend = "📈 Bullish"
+        else:
+            trend = "📉 Bearish"
+            
+        watchlist_data.append({
+            "Ticker": ticker,
+            "Price": latest_row['Close'],
+            "Change $": change,
+            "Change %": pct_change,
+            "Volume": latest_row['Volume'],
+            "RSI": f"{rsi:.0f} ({rsi_status})",
+            "Trend": trend
+        })
+        
+    return pd.DataFrame(watchlist_data)
+
+# --- Market Overview / Watchlist ---
+st.title("📊 Market Overview")
+with st.expander("Watchlist Details", expanded=True):
+    wl_df = generate_watchlist(df)
+    
+    if not wl_df.empty:
+        st.dataframe(
+            wl_df,
+            column_config={
+                "Ticker": "Stock",
+                "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                "Change $": st.column_config.NumberColumn("Change", format="$%.2f"),
+                "Change %": st.column_config.NumberColumn(
+                    "Change %", 
+                    format="%.2f%%"
+                ),
+                "Volume": st.column_config.NumberColumn("Volume", format="%d"),
+            },
+            hide_index=True,
+            use_container_width=True,
+            height=300
+        )
+
+st.divider()
+
 # Ticker Selection
 if 'Ticker' in df.columns:
     tickers = df['Ticker'].unique()
