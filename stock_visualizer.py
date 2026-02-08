@@ -69,3 +69,56 @@ def create_chart(df, ticker):
     )
     
     return fig
+
+def create_prediction_chart(ticker_df, forecast_df, ticker):
+    """
+    Generates a comparison chart of Actual vs Predicted prices.
+    forecast_df should be filtered for the specific ticker.
+    """
+    fig = go.Figure()
+    
+    # 1. Actual Price Line
+    fig.add_trace(go.Scatter(
+        x=ticker_df['Date'], 
+        y=ticker_df['Close'], 
+        mode='lines',
+        name='Actual Price',
+        line=dict(color='cyan', width=2)
+    ))
+    
+    # 2. Predicted Price Scatter/Lines
+    # We plot the PREDICTED value on the TARGET date.
+    # forecast_df columns: target_date_1d, predicted_1d
+    
+    if not forecast_df.empty:
+        # Ensure dates are datetime
+        forecast_df['target_date_1d'] = pd.to_datetime(forecast_df['target_date_1d'])
+        forecast_df['predicted_1d'] = pd.to_numeric(forecast_df['predicted_1d'])
+        
+        # Sort by date and drop duplicates (keep last entry for same target date)
+        forecast_df = forecast_df.sort_values(by='target_date_1d', ascending=True)
+        forecast_df = forecast_df.drop_duplicates(subset=['target_date_1d'], keep='last')
+        
+        fig.add_trace(go.Scatter(
+            x=forecast_df['target_date_1d'], 
+            y=forecast_df['predicted_1d'], 
+            mode='markers+lines',
+            name='AI Prediction (1-Day)',
+            line=dict(color='orange', width=1, dash='dot'),
+            marker=dict(symbol='x', size=8, color='orange')
+        ))
+        
+    fig.update_layout(
+        title=f'{ticker} AI Accuracy: Actual vs Predicted',
+        yaxis_title='Price',
+        template="plotly_dark",
+        height=500,
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01
+        )
+    )
+    
+    return fig

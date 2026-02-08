@@ -360,6 +360,23 @@ with tab4:
     history_df = db_manager.get_all_forecasts()
     
     if not history_df.empty:
+        # --- AI Comparison Chart ---
+        st.markdown("### 📈 AI vs Actual Performance")
+        
+        # Filter history for selected ticker
+        ticker_history = history_df[history_df['ticker'] == selected_ticker].copy()
+        
+        if not ticker_history.empty:
+            # Create chart
+            fig_ai = stock_visualizer.create_prediction_chart(ticker_df, ticker_history, selected_ticker)
+            st.plotly_chart(fig_ai, use_container_width=True)
+        else:
+            st.info(f"No forecast history yet for {selected_ticker}.")
+            
+        st.divider()
+        # ---------------------------
+    
+    if not history_df.empty:
         # Normalize column names to match DB schema if needed, but fetch returns DB cols:
         # id, date_logged, ticker, target_date_1d, predicted_1d, ...
         
@@ -397,7 +414,7 @@ with tab4:
                     st.info("No new predictions to verify (Target dates haven't arrived yet or data not fetched).")
         
         # Display Table
-        st.dataframe(history_df.sort_values('date_logged', ascending=False))
+        # st.dataframe(history_df.sort_values('date_logged', ascending=False))
         
         # Summary Metrics
         if not history_df['error_1d_pct'].isna().all():
