@@ -240,109 +240,63 @@ with tab2:
         """)
     
     st.write("---")
-    st.write("---")
-    st.markdown("### 🤖 ai Event Simulator (Data-Driven)")
-    st.caption("Select upcoming events. The AI will apply historical impact factors (Short Term vs Medium Term) from `external_index.csv`.")
+    st.markdown("### 🌍 Macro Drivers HUD")
+    st.caption("The AI automatically incorporates these global indicators into its predictions to gauge market fear, energy costs, and trade tension.")
     
-    # Load External Index
-    index_path = os.path.join(current_dir, 'external_index.csv')
-    if os.path.exists(index_path):
-        external_df = pd.read_csv(index_path)
-        
-        # Display Format: "Event Name (1D: -2%, 1W: -5%)"
-        external_df['Display'] = external_df.apply(
-            lambda x: f"{x['Event']} (1D: {x['Impact_1D']}%, 1W: {x['Impact_1W']}%)", axis=1
-        )
-        event_options = external_df['Display'].tolist()
-        
-        selected_events = st.multiselect("Select Active Scenarios:", event_options)
-        
-        # Calculate Adjustment
-        adj_factor_1d = 0.0
-        adj_factor_1w = 0.0
-        active_impacts = []
-        
-        if selected_events:
-            for item in selected_events:
-                # Lookup
-                row = external_df[external_df['Display'] == item].iloc[0]
-                
-                i_1d = row['Impact_1D']
-                i_1w = row['Impact_1W']
-                
-                adj_factor_1d += i_1d
-                adj_factor_1w += i_1w
-                
-                active_impacts.append(f"{row['Event']}")
-            
-            st.info(f"**Applied Events:** {', '.join(active_impacts)}")
-            col_adj1, col_adj2 = st.columns(2)
-            col_adj1.markdown(f"**Total 1-Day Impact:** `{adj_factor_1d:+.1f}%`")
-            col_adj2.markdown(f"**Total 1-Week Impact:** `{adj_factor_1w:+.1f}%`")
-        else:
-            st.info("No external scenarios selected. Using pure technical forecast.")
-            
+    macro_cols = st.columns(4)
+    if 'VIX_Close' in ticker_df.columns and not ticker_df.empty and not pd.isna(ticker_df['VIX_Close'].iloc[-1]):
+        macro_cols[0].metric("Volatility Sandbox (VIX)", f"{ticker_df['VIX_Close'].iloc[-1]:.2f}")
+        macro_cols[1].metric("Geopolitics (Gold)", f"${ticker_df['Gold_Close'].iloc[-1]:.2f}")
+        macro_cols[2].metric("Energy (Oil)", f"${ticker_df['Oil_Close'].iloc[-1]:.2f}")
+        macro_cols[3].metric("Trade (USD Index)", f"{ticker_df['USD_Close'].iloc[-1]:.2f}")
     else:
-        st.warning("⚠️ `external_index.csv` not found. Please create it to use the AI Simulator.")
-        adj_factor_1d = 0.0
-        adj_factor_1w = 0.0
+        st.info("Macro data is pending. Click 'Refetch ALL Data' in the sidebar to sync the AI brain.")
 
     st.write("---")
 
-    if st.button("Run Forecast (Train 3 Models)"):
-        with st.spinner("Training Random Forest, Gradient Boosting, and Linear Regression..."):
+    if st.button("Run Forecast Engine (Train 5 Models)"):
+        with st.spinner("Training Random Forest, Gradient Boosting, Linear Regression, Ridge, and SVR..."):
             res = stock_forecaster.run_forecast(df, selected_ticker)
             
             if "error" in res:
                 st.error(res["error"])
             else:
-                # Apply Scenarios
-                forecast_1d_adj = res['forecast_1day'] * (1 + adj_factor_1d/100)
-                forecast_5d_adj = res['forecast_5days'] * (1 + adj_factor_1w/100)
+                forecast_1d = res['forecast_1day']
+                forecast_5d = res['forecast_5days']
                 
                 # Store in session state for saving
                 st.session_state['last_forecast'] = {
                     'ticker': selected_ticker,
                     'date_logged': datetime.now().strftime('%Y-%m-%d'),
                     'target_1d': (pd.to_datetime(latest_date) + timedelta(days=1)).strftime('%Y-%m-%d'),
-                    'pred_1d': round(forecast_1d_adj, 2),
+                    'pred_1d': round(forecast_1d, 2),
                     'target_1w': (pd.to_datetime(latest_date) + timedelta(days=5)).strftime('%Y-%m-%d'),
-                    'pred_1w': round(forecast_5d_adj, 2),
+                    'pred_1w': round(forecast_5d, 2),
                     'model': res['best_model_1day'], # Simplification: tracking 1D best model
-                    'adj_info': f"1D:{adj_factor_1d}%|1W:{adj_factor_1w}%"
+                    'adj_info': "AUTO_MACRO"
                 }
 
                 col1, col2 = st.columns(2)
                 
                 with col1:
                     st.markdown("#### Next Day Forecast")
-                    
-                    if adj_factor_1d == 0:
-                         st.metric("Price", f"${res['forecast_1day']:.2f}", 
-                              delta=f"{res['forecast_1day'] - res['current_price']:.2f}")
-                    else:
-                        st.metric("Adjusted Price", f"${forecast_1d_adj:.2f}", 
-                              delta=f"{forecast_1d_adj - res['current_price']:.2f}")
-                        st.caption(f"Raw Prediction: ${res['forecast_1day']:.2f} | Adj: {adj_factor_1d:+.1f}%")
-                        
+                    st.metric("Predicted Price", f"${forecast_1d:.2f}", delta=f"{forecast_1d - res['current_price']:.2f}")
                     st.success(f"🏆 Best Model: **{res['best_model_1day']}**")
-                    st.markdown("**Model Accuracy Competition (Lower Error IS Better):**")
-                    st.dataframe(pd.DataFrame.from_dict(res['comparison_1day'], orient='index', columns=['MAE Error']).sort_values('MAE Error'))
+                    with st.expander("Model Accuracies (Lower MAE is better)"):
+                        st.dataframe(pd.DataFrame.from_dict(res['comparison_1day'], orient='index', columns=['MAE Error']).sort_values('MAE Error'))
                     
                 with col2:
                     st.markdown("#### Next Week Forecast (5 Days)")
-                    
-                    if adj_factor_1w == 0:
-                        st.metric("Price", f"${res['forecast_5days']:.2f}",
-                              delta=f"{res['forecast_5days'] - res['current_price']:.2f}")
-                    else:
-                        st.metric("Adjusted Price", f"${forecast_5d_adj:.2f}",
-                              delta=f"{forecast_5d_adj - res['current_price']:.2f}")
-                        st.caption(f"Raw Prediction: ${res['forecast_5days']:.2f} | Adj: {adj_factor_1w:+.1f}%")
-                    
+                    st.metric("Predicted Price", f"${forecast_5d:.2f}", delta=f"{forecast_5d - res['current_price']:.2f}")
                     st.success(f"🏆 Best Model: **{res['best_model_5days']}**")
-                    st.markdown("**Model Accuracy Competition (Lower Error IS Better):**")
-                    st.dataframe(pd.DataFrame.from_dict(res['comparison_5days'], orient='index', columns=['MAE Error']).sort_values('MAE Error'))
+                    with st.expander("Model Accuracies (Lower MAE is better)"):
+                        st.dataframe(pd.DataFrame.from_dict(res['comparison_5days'], orient='index', columns=['MAE Error']).sort_values('MAE Error'))
+
+                st.write("---")
+                
+                # Generate Future Trajectory Chart
+                fut_chart = stock_visualizer.create_future_forecast_chart(ticker_df, forecast_1d, forecast_5d, selected_ticker)
+                st.plotly_chart(fut_chart, use_container_width=True)
 
     # Save Button Section
     if 'last_forecast' in st.session_state and st.session_state['last_forecast']['ticker'] == selected_ticker:

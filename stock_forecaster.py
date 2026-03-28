@@ -1,21 +1,43 @@
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.svm import SVR
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error
 
-def train_and_evaluate(model, X, y):
+def train_and_evaluate(model_class, model_kwargs, X, y):
     """
-    Helper to train a model and return MAE on test set.
+    Trains across TimeSeries splits to get a robust MAE.
+    Returns the average MAE, a model fitted on all provided data, and the scaler.
     """
-    # Validation Split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+    tscv = TimeSeriesSplit(n_splits=4)
+    maes = []
     
-    model.fit(X_train, y_train)
-    preds = model.predict(X_test)
-    mae = mean_absolute_error(y_test, preds)
-    return mae, model
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X) # X is a dataframe, output is numpy array
+    
+    # We must reset index of y so iloc alignment works perfectly with enumeration
+    y_vals = y.values
+    
+    for train_index, test_index in tscv.split(X_scaled):
+        X_train, X_test = X_scaled[train_index], X_scaled[test_index]
+        y_train, y_test = y_vals[train_index], y_vals[test_index]
+        
+        # Instantiate fresh model for this fold
+        model = model_class(**model_kwargs)
+        model.fit(X_train, y_train)
+        preds = model.predict(X_test)
+        maes.append(mean_absolute_error(y_test, preds))
+        
+    avg_mae = np.mean(maes)
+    
+    # Train final model on ALL data in this set
+    final_model = model_class(**model_kwargs)
+    final_model.fit(X_scaled, y_vals)
+    
+    return avg_mae, final_model, scaler
 
 def run_forecast(df, ticker):
     """
@@ -27,7 +49,7 @@ def run_forecast(df, ticker):
     else:
         ticker_df = df.copy()
     
-    features = ['Open', 'High', 'Low', 'Close', 'Volume', 'SMA_50', 'SMA_200', 'BB_Upper', 'BB_Middle', 'BB_Lower', 'RSI', 'MACD', 'MACD_Signal', 'ATR', 'OBV']
+    features = ['Open', 'High', 'Low', 'Close', 'Volume', 'SMA_50', 'SMA_200', 'BB_Upper', 'BB_Middle', 'BB_Lower', 'RSI', 'MACD', 'MACD_Signal', 'ATR', 'OBV', 'VIX_Close', 'Oil_Close', 'Gold_Close', 'USD_Close']
     
     # Check if we have all features
     missing_cols = [col for col in features if col not in ticker_df.columns]
@@ -51,10 +73,12 @@ def run_forecast(df, ticker):
     results = {}
     
     # Define Models to Try
-    models = {
-        'Random Forest': RandomForestRegressor(n_estimators=100, random_state=42),
-        'Gradient Boosting': GradientBoostingRegressor(n_estimators=100, random_state=42),
-        'Linear Regression': LinearRegression()
+    models_config = {
+        'Random Forest': (RandomForestRegressor, {'n_estimators': 100, 'random_state': 42}),
+        'Gradient Boosting': (GradientBoostingRegressor, {'n_estimators': 100, 'random_state': 42}),
+        'Linear Regression': (LinearRegression, {}),
+        'Ridge Regression': (Ridge, {'alpha': 1.0}),
+        'SVR (Support Vector)': (SVR, {'kernel': 'rbf', 'C': 100, 'gamma': 'scale'})
     }
     
     # --- Next Day Model Selection ---
@@ -64,20 +88,18 @@ def run_forecast(df, ticker):
     best_mae_day = float('inf')
     best_model_name_day = None
     best_model_day = None
+    best_scaler_day = None
     
     day_metrics = {}
     
-    for name, model_inst in models.items():
-        # Clone model instance (re-init) to be safe or just fit directly as they are fresh
-        mae, _ = train_and_evaluate(model_inst, X_day, y_day)
+    for name, (m_class, m_kwargs) in models_config.items():
+        mae, final_m, scaler = train_and_evaluate(m_class, m_kwargs, X_day, y_day)
         day_metrics[name] = mae
         if mae < best_mae_day:
             best_mae_day = mae
             best_model_name_day = name
-            best_model_day = model_inst # This is the fitted instance on train set
-            
-    # Re-train BEST model on FULL data
-    best_model_day.fit(X_day, y_day)
+            best_model_day = final_m
+            best_scaler_day = scaler
     
     results['mae_1day'] = best_mae_day
     results['best_model_1day'] = best_model_name_day
@@ -90,23 +112,18 @@ def run_forecast(df, ticker):
     best_mae_week = float('inf')
     best_model_name_week = None
     best_model_week = None
+    best_scaler_week = None
     
     week_metrics = {}
     
-    for name, model_inst in models.items():
-        # Re-instantiate for week target to avoid leakage/state issues
-        if name == 'Random Forest': model_inst = RandomForestRegressor(n_estimators=100, random_state=42)
-        elif name == 'Gradient Boosting': model_inst = GradientBoostingRegressor(n_estimators=100, random_state=42)
-        else: model_inst = LinearRegression()
-            
-        mae, _ = train_and_evaluate(model_inst, X_week, y_week)
+    for name, (m_class, m_kwargs) in models_config.items():
+        mae, final_m, scaler = train_and_evaluate(m_class, m_kwargs, X_week, y_week)
         week_metrics[name] = mae
         if mae < best_mae_week:
             best_mae_week = mae
             best_model_name_week = name
-            best_model_week = model_inst
-            
-    best_model_week.fit(X_week, y_week)
+            best_model_week = final_m
+            best_scaler_week = scaler
     
     results['mae_5days'] = best_mae_week
     results['best_model_5days'] = best_model_name_week
@@ -116,7 +133,19 @@ def run_forecast(df, ticker):
     latest_data = ticker_df.iloc[[-1]][features]
     results['current_price'] = latest_data['Close'].values[0]
     
-    results['forecast_1day'] = best_model_day.predict(latest_data)[0]
-    results['forecast_5days'] = best_model_week.predict(latest_data)[0]
+    # MUST scale the latest_data using the respective scalers!
+    latest_scaled_day = best_scaler_day.transform(latest_data)
+    latest_scaled_week = best_scaler_week.transform(latest_data)
+    
+    results['forecast_1day'] = best_model_day.predict(latest_scaled_day)[0]
+    results['forecast_5days'] = best_model_week.predict(latest_scaled_week)[0]
+    
+    # We will also output current macro logic for the HUD
+    results['latest_macro'] = {
+        'VIX': latest_data['VIX_Close'].values[0],
+        'Oil': latest_data['Oil_Close'].values[0],
+        'Gold': latest_data['Gold_Close'].values[0],
+        'USD': latest_data['USD_Close'].values[0]
+    }
     
     return results

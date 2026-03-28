@@ -4,7 +4,35 @@ import numpy as np
 import os
 import db_manager
 
-def process_stock_data(df, ticker):
+def fetch_macro_data(period="2y"):
+    """
+    Fetches macroeconomic proxy data and returns a combined dataframe.
+    """
+    tickers = {'^VIX': 'VIX_Close', 'CL=F': 'Oil_Close', 'GC=F': 'Gold_Close', 'DX-Y.NYB': 'USD_Close'}
+    print("Fetching macro-economic data...")
+    macro_df = pd.DataFrame()
+    for t, col in tickers.items():
+        try:
+            df = yf.download(t, period=period, interval="1d", progress=False)
+            if not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    if df.columns.nlevels > 1:
+                        df.columns = df.columns.get_level_values(0)
+                # Ensure index is datetime and drop timezone for safe merging
+                df.index = pd.to_datetime(df.index).tz_localize(None)
+                df = df[['Close']].rename(columns={'Close': col})
+                if macro_df.empty:
+                    macro_df = df
+                else:
+                    macro_df = macro_df.join(df, how='outer')
+        except Exception as e:
+            print(f"Error fetching {t}: {e}")
+            
+    if not macro_df.empty:
+        macro_df = macro_df.ffill().bfill()
+    return macro_df
+
+def process_stock_data(df, ticker, macro_df=None):
     """
     Calculates indicators and prepares dataframe for storage.
     """
@@ -15,6 +43,9 @@ def process_stock_data(df, ticker):
                     df.columns = df.columns.get_level_values(0)
         except Exception:
             pass
+            
+    # Normalize index to timezone-naive
+    df.index = pd.to_datetime(df.index).tz_localize(None)
 
     # Calculate Moving Averages
     df['SMA_50'] = df['Close'].rolling(window=50).mean()
@@ -67,16 +98,27 @@ def process_stock_data(df, ticker):
     df['Stoch_D'] = df['Stoch_K'].rolling(window=3).mean()
 
     
+    if macro_df is not None and not macro_df.empty:
+        df = df.join(macro_df, how='left')
+        # We forward fill because some days have stock data but missing macro (e.g. holidays)
+        cols_to_fill = ['VIX_Close', 'Oil_Close', 'Gold_Close', 'USD_Close']
+        existing_fill = [c for c in cols_to_fill if c in df.columns]
+        df[existing_fill] = df[existing_fill].ffill().bfill()
+
     # Add Ticker column
     df['Ticker'] = ticker
     
     # Reset index to transform Date index into a column
     df = df.reset_index()
+    # rename index column to 'Date' if it's not already
+    if 'index' in df.columns and 'Date' not in df.columns:
+        df = df.rename(columns={'index': 'Date'})
     
     # Define relevant columns to keep
     columns_to_keep = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Volume', 
                         'SMA_50', 'SMA_200', 'BB_Upper', 'BB_Middle', 'BB_Lower', 'RSI',
-                        'MACD', 'MACD_Signal', 'ATR', 'OBV', 'EMA_20', 'EMA_50', 'Stoch_K', 'Stoch_D']
+                        'MACD', 'MACD_Signal', 'ATR', 'OBV', 'EMA_20', 'EMA_50', 'Stoch_K', 'Stoch_D',
+                        'VIX_Close', 'Oil_Close', 'Gold_Close', 'USD_Close']
     
     # Filter only existing columns
     existing_cols = [c for c in columns_to_keep if c in df.columns]
@@ -101,15 +143,14 @@ def add_ticker(ticker_symbol):
         return f"Error reading database: {e}"
         
     print(f"Fetching data for new ticker: {ticker_symbol}...")
+    macro_df = fetch_macro_data()
     try:
         df = yf.download(ticker_symbol, period="2y", interval="1d", progress=False)
         
         if df.empty:
             return f"No data found for {ticker_symbol}. Check spelling."
             
-        processed_df = process_stock_data(df, ticker_symbol)
-        
-        processed_df = process_stock_data(df, ticker_symbol)
+        processed_df = process_stock_data(df, ticker_symbol, macro_df)
         
         # Save to DB
         db_manager.save_price_data(processed_df)
@@ -125,6 +166,7 @@ def fetch_stock_data():
     all_data = []
 
     print("Starting stock data download...")
+    macro_df = fetch_macro_data()
 
     for ticker in tickers:
         print(f"Fetching data for {ticker}...")
@@ -136,16 +178,12 @@ def fetch_stock_data():
                 print(f"No data found for {ticker}")
                 continue
 
-            processed_df = process_stock_data(df, ticker)
+            processed_df = process_stock_data(df, ticker, macro_df)
             all_data.append(processed_df)
             
         except Exception as e:
             print(f"Error fetching {ticker}: {e}")
 
-    if all_data:
-        print("Concatenating data...")
-        final_df = pd.concat(all_data)
-        
     if all_data:
         print("Concatenating data...")
         final_df = pd.concat(all_data)

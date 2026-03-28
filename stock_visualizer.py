@@ -1,6 +1,7 @@
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from datetime import timedelta
 
 def create_chart(df, ticker, overlays=None, subplots=None):
     """
@@ -141,6 +142,57 @@ def create_prediction_chart(ticker_df, forecast_df, ticker):
             xanchor="left",
             x=0.01
         )
+    )
+    
+    return fig
+
+def create_future_forecast_chart(ticker_df, forecast_1d, forecast_5d, ticker):
+    """
+    Plots the recent actual price alongside the predicted future trajectory. 
+    """
+    # Get last 60 days
+    recent_df = ticker_df.tail(60).copy()
+    
+    fig = go.Figure()
+    
+    # 1. Plot Recent Actual Price
+    fig.add_trace(go.Scatter(
+        x=recent_df['Date'], 
+        y=recent_df['Close'], 
+        mode='lines',
+        name='Actual Price',
+        line=dict(color='cyan', width=2)
+    ))
+
+    # 2. Setup Future trajectory
+    last_row = recent_df.iloc[-1]
+    last_date = last_row['Date']
+    last_price = last_row['Close']
+    
+    # Calculate future dates (approximate calendar days for 1d and 5d business trading days)
+    date_1d = last_date + timedelta(days=1)
+    date_week = last_date + timedelta(days=7)
+    
+    # The trajectory connects: Current Price -> 1D Forecast -> 5D Forecast
+    traj_dates = [last_date, date_1d, date_week]
+    traj_prices = [last_price, forecast_1d, forecast_5d]
+    
+    fig.add_trace(go.Scatter(
+        x=traj_dates, 
+        y=traj_prices, 
+        mode='lines+markers',
+        name='AI Fast-Forward',
+        line=dict(color='yellow', width=2, dash='dash'),
+        marker=dict(symbol='star', size=10, color='yellow')
+    ))
+
+    fig.update_layout(
+        title=f'{ticker} Extrapolated Trajectory (Next 5 Days)',
+        yaxis_title='Price',
+        template="plotly_dark",
+        height=400,
+        margin=dict(l=40, r=40, t=60, b=40),
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
     )
     
     return fig

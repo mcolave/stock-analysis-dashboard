@@ -59,6 +59,10 @@ def init_prices_table():
             ema_50 REAL,
             stoch_k REAL,
             stoch_d REAL,
+            vix_close REAL,
+            oil_close REAL,
+            gold_close REAL,
+            usd_close REAL,
             PRIMARY KEY (date, ticker)
         )
     ''')
@@ -105,6 +109,15 @@ def migrate_indicators():
         c.execute("ALTER TABLE stock_prices ADD COLUMN ema_50 REAL")
         c.execute("ALTER TABLE stock_prices ADD COLUMN stoch_k REAL")
         c.execute("ALTER TABLE stock_prices ADD COLUMN stoch_d REAL")
+    except sqlite3.OperationalError:
+        # Expected if columns already exist
+        pass
+        
+    try:    
+        c.execute("ALTER TABLE stock_prices ADD COLUMN vix_close REAL")
+        c.execute("ALTER TABLE stock_prices ADD COLUMN oil_close REAL")
+        c.execute("ALTER TABLE stock_prices ADD COLUMN gold_close REAL")
+        c.execute("ALTER TABLE stock_prices ADD COLUMN usd_close REAL")
     except sqlite3.OperationalError:
         # Expected if columns already exist
         pass
@@ -186,7 +199,8 @@ def save_price_data(df):
     required_cols = ['date', 'ticker', 'open', 'high', 'low', 'close', 'volume', 
                      'sma_50', 'sma_200', 'bb_upper', 'bb_middle', 'bb_lower', 
                      'rsi', 'macd', 'macd_signal', 'atr', 'obv', 
-                     'ema_20', 'ema_50', 'stoch_k', 'stoch_d']
+                     'ema_20', 'ema_50', 'stoch_k', 'stoch_d',
+                     'vix_close', 'oil_close', 'gold_close', 'usd_close']
     
     for col in required_cols:
         if col not in df_clean.columns:
@@ -203,12 +217,14 @@ def save_price_data(df):
             date, ticker, open, high, low, close, volume, 
             sma_50, sma_200, bb_upper, bb_middle, bb_lower, 
             rsi, macd, macd_signal, atr, obv,
-            ema_20, ema_50, stoch_k, stoch_d
+            ema_20, ema_50, stoch_k, stoch_d,
+            vix_close, oil_close, gold_close, usd_close
         ) VALUES (
             :date, :ticker, :open, :high, :low, :close, :volume,
             :sma_50, :sma_200, :bb_upper, :bb_middle, :bb_lower,
             :rsi, :macd, :macd_signal, :atr, :obv,
-            :ema_20, :ema_50, :stoch_k, :stoch_d
+            :ema_20, :ema_50, :stoch_k, :stoch_d,
+            :vix_close, :oil_close, :gold_close, :usd_close
         )
     ''', records)
     
@@ -241,7 +257,8 @@ def load_price_data(ticker=None):
         'date': 'Date', 'ticker': 'Ticker', 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume',
         'sma_50': 'SMA_50', 'sma_200': 'SMA_200', 'bb_upper': 'BB_Upper', 'bb_middle': 'BB_Middle', 'bb_lower': 'BB_Lower',
         'rsi': 'RSI', 'macd': 'MACD', 'macd_signal': 'MACD_Signal', 'atr': 'ATR', 'obv': 'OBV',
-        'ema_20': 'EMA_20', 'ema_50': 'EMA_50', 'stoch_k': 'Stoch_K', 'stoch_d': 'Stoch_D'
+        'ema_20': 'EMA_20', 'ema_50': 'EMA_50', 'stoch_k': 'Stoch_K', 'stoch_d': 'Stoch_D',
+        'vix_close': 'VIX_Close', 'oil_close': 'Oil_Close', 'gold_close': 'Gold_Close', 'usd_close': 'USD_Close'
     }
     df = df.rename(columns=col_map)
     
