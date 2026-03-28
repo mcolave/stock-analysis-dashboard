@@ -56,6 +56,16 @@ def process_stock_data(df, ticker):
     df['OBV_Multiplier'] = np.where(df['Close'] == df['PrevClose'], 0, df['OBV_Multiplier'])
     df['OBV'] = (df['Volume'] * df['OBV_Multiplier']).cumsum()
 
+    # EMA 20 & 50
+    df['EMA_20'] = df['Close'].ewm(span=20, adjust=False).mean()
+    df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
+    
+    # Stochastic Oscillator
+    low_14 = df['Low'].rolling(window=14).min()
+    high_14 = df['High'].rolling(window=14).max()
+    df['Stoch_K'] = 100 * ((df['Close'] - low_14) / (high_14 - low_14))
+    df['Stoch_D'] = df['Stoch_K'].rolling(window=3).mean()
+
     
     # Add Ticker column
     df['Ticker'] = ticker
@@ -66,7 +76,7 @@ def process_stock_data(df, ticker):
     # Define relevant columns to keep
     columns_to_keep = ['Date', 'Ticker', 'Open', 'High', 'Low', 'Close', 'Volume', 
                         'SMA_50', 'SMA_200', 'BB_Upper', 'BB_Middle', 'BB_Lower', 'RSI',
-                        'MACD', 'MACD_Signal', 'ATR', 'OBV']
+                        'MACD', 'MACD_Signal', 'ATR', 'OBV', 'EMA_20', 'EMA_50', 'Stoch_K', 'Stoch_D']
     
     # Filter only existing columns
     existing_cols = [c for c in columns_to_keep if c in df.columns]

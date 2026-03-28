@@ -14,6 +14,7 @@ import stock_backtester
 import stock_fetcher
 import db_manager
 import stock_analyst
+import stock_news
 
 # Initialize DB on startup
 db_manager.init_db()
@@ -81,7 +82,7 @@ def generate_watchlist(df):
         if len(ticker_df) > 1:
             prev_close = ticker_df.iloc[-2]['Close']
             change = latest_row['Close'] - prev_close
-            pct_change = (change / prev_close) # Percent as decimal
+            pct_change = (change / prev_close) * 100 # Multiply by 100 for correct percentage
         else:
             change = 0.0
             pct_change = 0.0
@@ -107,10 +108,12 @@ def generate_watchlist(df):
         watchlist_data.append({
             "Ticker": ticker,
             "Price": latest_row['Close'],
-            "Change $": change,
+            "Change": change,
             "Change %": pct_change,
-            "Volume": latest_row['Volume'],
-            "RSI": f"{rsi:.0f} ({rsi_status})",
+            "30D Trend": ticker_df['Close'].tail(30).tolist(),
+            "Volume": int(latest_row['Volume']),
+            "RSI Score": rsi,
+            "RSI Status": rsi_status,
             "Trend": trend
         })
         
@@ -125,14 +128,34 @@ with st.expander("Watchlist Details", expanded=True):
         st.dataframe(
             wl_df,
             column_config={
-                "Ticker": "Stock",
+                "Ticker": st.column_config.TextColumn("Stock"),
                 "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
-                "Change $": st.column_config.NumberColumn("Change", format="$%.2f"),
+                "Change": st.column_config.NumberColumn(
+                    "Change", 
+                    format="%.2f",
+                    help="Absolute change from previous close"
+                ),
                 "Change %": st.column_config.NumberColumn(
                     "Change %", 
-                    format="%.2f%%"
+                    format="%+.2f%%", # Added + to explicitly show sign
+                    help="Percentage change from previous close"
                 ),
-                "Volume": st.column_config.NumberColumn("Volume", format="%d"),
+                "30D Trend": st.column_config.LineChartColumn(
+                    "30D Trend",
+                    help="Last 30 daily closing prices"
+                ),
+                "Volume": st.column_config.NumberColumn(
+                    "Volume", 
+                    format="%d"
+                ),
+                "RSI Score": st.column_config.ProgressColumn(
+                    "RSI Score",
+                    help="Relative Strength Index (Momentum)",
+                    format="%.0f",
+                    min_value=0,
+                    max_value=100
+                ),
+                "RSI Status": st.column_config.TextColumn("RSI Target")
             },
             hide_index=True,
             use_container_width=True,
@@ -160,21 +183,40 @@ st.title(f"{selected_ticker} Analysis Dashboard")
 st.markdown(f"**Current Price:** ${latest_price:.2f} &nbsp;|&nbsp; **Date:** {latest_date}")
 
 # Tabs
-tab1, tab2, tab3, tab4 = st.tabs(["📈 Chart Analysis", "🔮 Forecasting", "🔙 Backtesting", "✅ Accuracy Tracker"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Chart Analysis", "🔮 Forecasting", "🔙 Backtesting", "✅ Accuracy Tracker", "📰 News & Sentiment"])
 
 # Tab 1: Visualization
 with tab1:
     st.subheader("Technical Analysis Chart")
+    
+    col_opt1, col_opt2 = st.columns(2)
+    with col_opt1:
+        selected_overlays = st.multiselect(
+            "📈 Select Price Overlays:",
+            ["SMA 50", "SMA 200", "EMA 20", "EMA 50", "Bollinger Bands"],
+            default=["SMA 50", "SMA 200", "Bollinger Bands"]
+        )
+    with col_opt2:
+        selected_subplots = st.multiselect(
+            "📉 Select Subplot Indicators:",
+            ["RSI", "MACD", "Stochastic", "ATR", "OBV"],
+            default=["RSI", "MACD"]
+        )
+        
     with st.expander("ℹ️ Need help? Explanation for Dummies"):
         st.markdown("""
         **What am I looking at?**
+        *   **Moving Averages (SMA/EMA)**: Lines tracking the average price. Good for spotting long-term vs short-term trends.
         *   **Bollinger Bands (Gray Shaded)**: Shows volatility. Price usually stays inside these bands. If it touches the top, it might be expensive (Overbought). If it touches the bottom, it might be cheap (Oversold).
         *   **RSI (Purple Line)**: Momentum. Above 70 = Overbought. Below 30 = Oversold.
         *   **MACD (Bottom Panel)**: Trend finder.
             *   *bars (Green/Red)*: Momentum strength. Green = Bullish (Up), Red = Bearish (Down).
             *   *Lines (Cyan/Orange)*: When Cyan crosses above Orange, it's often a Buy signal.
+        *   **Stochastic**: Another momentum oscillator. Above 80 = Overbought, Below 20 = Oversold.
+        *   **ATR**: Measures market volatility. High ATR = large daily price swings.
+        *   **OBV**: Measures buying and selling pressure based on volume.
         """)
-    fig = stock_visualizer.create_chart(df, selected_ticker)
+    fig = stock_visualizer.create_chart(df, selected_ticker, overlays=selected_overlays, subplots=selected_subplots)
     st.plotly_chart(fig, use_container_width=True)
 
     # Plain English Analysis
@@ -427,3 +469,47 @@ with tab4:
                  
     else:
         st.info("No history found. Go to 'Forecasting', run a prediction, and click 'Save'.")
+
+# Tab 5: News & Sentiment
+with tab5:
+    st.subheader(f"📰 Recent News & AI Sentiment for {selected_ticker}")
+    st.markdown("We use Natural Language Processing to analyze recent headlines and determine if the coverage is Bullish or Bearish.")
+    
+    if st.button("Fetch Latest News"):
+        with st.spinner(f"Scanning internet for {selected_ticker} news..."):
+            news_df, avg_score, overall = stock_news.get_news_sentiment(selected_ticker)
+            
+            if not news_df.empty:
+                col1, col2 = st.columns(2)
+                
+                # Use delta color creatively for the metric
+                delta_color = "normal"
+                if "Bullish" in overall:
+                    delta_color = "normal"
+                elif "Bearish" in overall:
+                    delta_color = "inverse"
+                else:
+                    delta_color = "off"
+                    
+                col1.metric("Overall AI Sentiment", overall, 
+                           delta=f"{avg_score:.2f} (Compound Score)", 
+                           delta_color=delta_color)
+                
+                st.write("---")
+                
+                # Display DataFrame with clickable links
+                st.dataframe(
+                    news_df,
+                    column_config={
+                        "Sentiment Score": st.column_config.NumberColumn(
+                            "Score",
+                            help="VADER Compound Sentiment Score (-1 to 1)",
+                            format="%.2f"
+                        ),
+                        "Link": st.column_config.LinkColumn("Source URL")
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
+            else:
+                st.warning(f"No recent news found for {selected_ticker}.")
